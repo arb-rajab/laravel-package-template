@@ -1,0 +1,14 @@
+/vendor/
+/build/
+/.phpunit.cache/
+# Libraries do not commit a lock file: consumers resolve their own versions,
+# and CI must exercise the newest versions the constraints allow.
+composer.lock
+composer.phar
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+.env
+.phpunit.result.cache

@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege for the GITHUB_TOKEN; jobs that need more declare it themselves.
+permissions:
+  contents: read
+
+jobs:
+  secrets-scan:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    name: Lint (Laravel Pint)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.4"
+          extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite
+          coverage: none
+      - name: Cache Composer dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor
+          key: composer-lint-${{ hashFiles('composer.json') }}
+          restore-keys: composer-lint-
+      # composer.lock is not committed (this is a library), so this resolves
+      # the newest versions the constraints allow.
+      - name: Install PHP dependencies
+        run: composer update --no-interaction --prefer-dist --no-progress
+      - name: Lint
+        run: composer lint
+
+  analyse:
+    name: Static analysis (Larastan / PHPStan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.4"
+          extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite
+          coverage: none
+      - name: Cache Composer dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor
+          key: composer-lint-${{ hashFiles('composer.json') }}
+          restore-keys: composer-lint-
+      - name: Install PHP dependencies
+        run: composer update --no-interaction --prefer-dist --no-progress
+      - name: Analyse
+        run: composer analyse
+
+  test:
+    name: Tests (Pest via Testbench) - PHP ${{ matrix.php }}, Laravel ${{ matrix.laravel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # Laravel 12 requires PHP ^8.2 and pairs with Testbench ^10.0.
+      # Laravel 13 requires PHP ^8.3 and pairs with Testbench ^11.0.
+      # Re-check Packagist before editing this list; it must mirror the
+      # constraints in composer.json.
+      matrix:
+        include:
+          - php: "8.2"
+            laravel: "^12.0"
+            testbench: "^10.0"
+          - php: "8.3"
+            laravel: "^12.0"
+            testbench: "^10.0"
+          - php: "8.3"
+            laravel: "^13.0"
+            testbench: "^11.0"
+          - php: "8.4"
+            laravel: "^13.0"
+            testbench: "^11.0"
+          - php: "8.5"
+            laravel: "^13.0"
+            testbench: "^11.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, dom, fileinfo, sqlite3, pdo_sqlite
+          coverage: none
+      - name: Cache Composer dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: vendor
+          key: composer-${{ matrix.php }}-${{ matrix.laravel }}-${{ hashFiles('composer.json') }}
+          restore-keys: composer-${{ matrix.php }}-${{ matrix.laravel }}-
+      - name: Select Laravel/Testbench versions for this matrix cell
+        run: |
+          composer require --no-interaction --no-update \
+            "illuminate/console:${{ matrix.laravel }}" \
+            "illuminate/contracts:${{ matrix.laravel }}" \
+            "illuminate/database:${{ matrix.laravel }}" \
+            "illuminate/support:${{ matrix.laravel }}"
+          composer require --no-interaction --no-update --dev \
+            "orchestra/testbench:${{ matrix.testbench }}"
+      - name: Install PHP dependencies
+        run: composer update --no-interaction --prefer-dist --no-progress
+      - name: Run tests (Pest)
+        run: composer test
+
+  dependency-scan:
+    name: Dependency vulnerability scan (composer audit + osv-scanner)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: "8.4"
+          coverage: none
+      # No lock file is committed, so resolve one for the scanners to read.
+      - name: Resolve dependencies
+        run: composer update --no-install --no-scripts --no-interaction --no-progress
+      - name: Composer audit
+        run: composer audit
+      - name: Run osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+        with:
+          scan-args: |-
+            --config=osv-scanner.toml
+            --lockfile=composer.lock
