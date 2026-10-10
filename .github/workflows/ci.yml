@@ -146,7 +146,7 @@ jobs:
       - name: Resolve dependencies
         run: composer update --no-install --no-scripts --no-interaction --no-progress
       - name: Composer audit
-        run: composer audit
+        run: composer audit --locked
       - name: Run osv-scanner
         uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
